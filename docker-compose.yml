@@ -1,0 +1,41 @@
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mssql_server
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=YourStrong!Passw0rd
+    ports:
+      - "1433:1433"
+    networks:
+      - mcp-network
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong!Passw0rd -Q 'SELECT 1' || exit 1" ]
+      interval: 10s
+      retries: 10
+      start_period: 10s
+
+  # MCP Server service definition for reference or debugging
+  # In production usage with an MCP client using stdio, you would typically use:
+  # docker run -i --rm --network mssql-mcp-server_mcp-network -e DB_HOST=mssql -e DB_USER=sa -e DB_PASSWORD=YourStrong!Passw0rd ...
+  mcp-server:
+    build: .
+    container_name: mcp_server
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      - DB_HOST=mssql
+      - DB_USER=sa
+      - DB_PASSWORD=YourStrong!Passw0rd
+      - DB_NAME=master
+      - DB_ENCRYPT=false
+      - DB_TRUST_CERT=true
+    networks:
+      - mcp-network
+    # Keep it alive for debugging if needed, though real usage is usually interactive
+    command: [ "node", "dist/index.js" ]
+
+networks:
+  mcp-network:
+    driver: bridge

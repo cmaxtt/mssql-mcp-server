@@ -1,0 +1,2 @@
+CREATE LOGIN mcp_user WITH PASSWORD = 'McpUser123!';
+ALTER SERVER ROLE sysadmin ADD MEMBER mcp_user;
