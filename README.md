@@ -41,17 +41,34 @@ docker-compose up -d --build
 ```
 
 ### 4. Connect an MCP Client
-You can run the server directly using Docker. Configure your MCP client (e.g., Claude Desktop, Zed, etc.) to run the following command:
 
-```bash
-docker run -i --rm \
-  --network host \
-  -e DB_HOST=localhost \
-  -e DB_USER=your_user \
-  -e DB_PASSWORD=your_password \
-  mssql-mcp-server
+#### Using Docker (Recommended)
+Add the following configuration to your MCP client settings (e.g., for Google Antigravity or Claude Desktop). This assumes you are running the database via `docker-compose`.
+
+```json
+{
+  "mcpServers": {
+    "mssql-mcp": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--network", "mssql-mcp-server_mcp-network",
+        "-e", "DB_HOST=mssql_server",
+        "-e", "DB_USER=simple_user",
+        "-e", "DB_PASSWORD=ComplexPassword1",
+        "-e", "DB_ENCRYPT=true",
+        "-e", "DB_TRUST_CERT=true",
+        "mssql-mcp"
+      ]
+    }
+  }
+}
 ```
-*Note: If connecting to a local SQL Server on the host machine from a container, use `host.docker.internal` as the `DB_HOST`.*
+
+#### Manual Docker Run
+You can also run the server directly using Docker for testing:
 
 ## Development
 

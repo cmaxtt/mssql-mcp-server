@@ -1,0 +1,28 @@
+{
+    "mcpServers": {
+        "mssql-mcp": {
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "--network",
+                "mssql-mcp-server_mcp-network",
+                "-e",
+                "DB_HOST=mssql_server",
+                "-e",
+                "DB_USER=simple_user",
+                "-e",
+                "DB_PASSWORD=ComplexPassword1",
+                "-e",
+                "DB_ENCRYPT=true",
+                "-e",
+                "DB_TRUST_CERT=true",
+                "mssql-mcp"
+            ],
+            "env": {},
+            "disabled": false,
+            "autoApprove": []
+        }
+    }
+}
