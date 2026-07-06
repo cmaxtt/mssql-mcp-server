@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mssql-schema": {
+      "type": "local",
+      "command": ["node", "dist/index.js"],
+      "enabled": true,
+      "environment": {},
+      "description": "TypeScript MCP server for schema inspection (list tables, describe columns, get DDL)"
+    },
+    "mssql-query": {
+      "type": "local",
+      "command": ["python", "python_version/main.py", "--mode", "stdio"],
+      "enabled": true,
+      "environment": {},
+      "description": "Python MCP server for query execution (read-only SELECT queries)"
+    }
+  }
+}

@@ -1,28 +1,18 @@
 {
     "mcpServers": {
-        "mssql-mcp": {
-            "command": "docker",
+        "mssql-schema": {
+            "command": "node",
             "args": [
-                "run",
-                "-i",
-                "--rm",
-                "--network",
-                "mssql-mcp-server_mcp-network",
-                "-e",
-                "DB_HOST=mssql_server",
-                "-e",
-                "DB_USER=simple_user",
-                "-e",
-                "DB_PASSWORD=ComplexPassword1",
-                "-e",
-                "DB_ENCRYPT=true",
-                "-e",
-                "DB_TRUST_CERT=true",
-                "mssql-mcp"
+                "c:/mssql_mcp_server/dist/index.js"
             ],
-            "env": {},
-            "disabled": false,
-            "autoApprove": []
+            "env": {
+                "DB_HOST": "your-server",
+                "DB_USER": "your-user",
+                "DB_PASSWORD": "your-password",
+                "DB_NAME": "your-database",
+                "DB_ENCRYPT": "false",
+                "DB_TRUST_CERT": "true"
+            }
         }
     }
 }

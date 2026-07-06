@@ -1,105 +1,95 @@
 # MS SQL MCP Server
 
-A Model Context Protocol (MCP) server that connects to Microsoft SQL Server, enabling AI agents to inspect database schemas (tables, columns, indexes, foreign keys) and generate DDL.
+A Model Context Protocol (MCP) server for Microsoft SQL Server. Enables AI agents to inspect database schemas (tables, columns, indexes, foreign keys) and generate DDL.
 
-## Features
+## Quickstart (2 minutes)
 
-- **Schema Inspection**:
-  - `list_schemas`: List all database schemas.
-  - `list_tables`: List tables within a schema.
-  - `describe_table`: Get detailed column definitions for a table.
-  - `list_indexes`: View index information.
-  - `list_foreign_keys`: innovative foreign key relationships.
-- **DDL Generation**:
-  - `get_ddl`: Generate `CREATE TABLE` statements based on table metadata.
-- **Docker Support**: Fully containerized setup for easy deployment.
+**Prerequisites:** Node.js 20+, a reachable SQL Server.
 
-## Prerequisites
-
-- [Docker](https://www.docker.com/) & Docker Compose
-- [Node.js](https://nodejs.org/) (v20+ for local development)
-
-## Quick Start
-
-### 1. Clone the Repository
 ```bash
 git clone https://github.com/cmaxtt/mssql-mcp-server.git
 cd mssql-mcp-server
-```
-
-### 2. Configuration
-Copy the example environment file:
-```bash
+npm install
+npm run build
 cp .env.example .env
+# Edit .env with your SQL Server credentials
 ```
-Edit `.env` with your SQL Server credentials.
 
-### 3. Run with Docker Compose
-This starts both an MS SQL Server instance (for testing) and the MCP Server.
+### Register with Hermes Agent
+
 ```bash
-docker-compose up -d --build
+npm run register
+# Or manually: ./scripts/register-with-hermes.sh
 ```
 
-### 4. Connect an MCP Client
+Restart Hermes (or `/reset` in-session), then ask: *"What tables are in the database?"*
 
-#### Using Docker (Recommended)
-Add the following configuration to your MCP client settings (e.g., for Google Antigravity or Claude Desktop). This assumes you are running the database via `docker-compose`.
+### Other MCP Clients
 
+**Claude Desktop** — add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "mssql-mcp": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "--network", "mssql-mcp-server_mcp-network",
-        "-e", "DB_HOST=mssql_server",
-        "-e", "DB_USER=simple_user",
-        "-e", "DB_PASSWORD=ComplexPassword1",
-        "-e", "DB_ENCRYPT=true",
-        "-e", "DB_TRUST_CERT=true",
-        "mssql-mcp"
-      ]
+    "mssql-schema": {
+      "command": "node",
+      "args": ["/path/to/mssql-mcp-server/dist/index.js"],
+      "env": {
+        "DB_HOST": "your-server",
+        "DB_USER": "your-user",
+        "DB_PASSWORD": "your-password",
+        "DB_NAME": "your-database",
+        "DB_ENCRYPT": "false",
+        "DB_TRUST_CERT": "true"
+      }
     }
   }
 }
 ```
 
-#### Manual Docker Run
-You can also run the server directly using Docker for testing:
+**OpenCode** — copy `.opencode/config.jsonc` to your project or global config.
 
-## Development
-
-### Install Dependencies
-```bash
-npm install
-```
-
-### Build
-```bash
-npm run build
-```
-
-### Local Testing
-A test script `test_mcp.js` is included to verify functionality.
-```bash
-# Ensure your local database is running
-npm run build
-node test_mcp.js
-```
+---
 
 ## Tools Reference
 
-| Tool Name | Arguments | Description |
-|-----------|-----------|-------------|
-| `list_schemas` | None | Lists all schemas in the database. |
-| `list_tables` | `schema` (optional) | Lists tables in the specified schema (default: all). |
-| `describe_table` | `schema`, `table` | Returns column details (type, length, nullable, default). |
-| `list_indexes` | `schema`, `table` | Lists indexes for a table. |
-| `list_foreign_keys` | `schema`, `table` | Lists foreign keys for a table. |
-| `get_ddl` | `schema`, `table` | Generates a CREATE TABLE SQL script. |
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `list_schemas` | None | Lists all schemas |
+| `list_tables` | `schema` (optional) | Lists tables |
+| `describe_table` | `schema`, `table` | Column details (type, length, nullable, default) |
+| `list_indexes` | `schema`, `table` | Indexes for a table |
+| `list_foreign_keys` | `schema`, `table` | Foreign key relationships |
+| `get_ddl` | `schema`, `table` | CREATE TABLE SQL script |
+
+---
+
+## Development
+
+```bash
+npm install          # Install dependencies
+npm run build        # Compile TypeScript
+npm test             # Run tests (25 unit tests)
+npm run test:watch   # Watch mode
+npm run dev          # TypeScript watch mode
+```
+
+---
+
+## Docker
+
+```bash
+docker-compose up -d --build
+```
+
+Starts a SQL Server 2022 container + the MCP server for testing.
+
+---
+
+## Optional: Python Query Server
+
+An optional FastMCP-based server for read-only SELECT queries lives in `python_version/`.
+Most users only need the TypeScript schema server. See `python_version/README.md` for setup.
 
 ## License
+
 ISC
