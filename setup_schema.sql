@@ -91,8 +91,50 @@ CREATE TABLE [tblPurchaseDetails](
 	[CatId] [int] NULL,
 	[ReturnValue] [money] NOT NULL,
 	[ItemClass] [smallint] NULL,
- CONSTRAINT [tblPurchaseDetails$PrimaryKey] PRIMARY KEY CLUSTERED 
-(
-    [pInvoiceDetailID] ASC
-)
-);
+	CONSTRAINT [tblPurchaseDetails$PrimaryKey] PRIMARY KEY CLUSTERED 
+	(
+	[pInvoiceDetailID] ASC
+	)
+	);
+
+	-- ── Integration test objects ──
+
+	-- Test table with identity PK, unique constraint, default, check
+	CREATE TABLE MCP_Test_Customers (
+	CustomerID int IDENTITY(1,1) NOT NULL,
+	Name nvarchar(100) NOT NULL,
+	Email nvarchar(255) NULL,
+	Status varchar(20) NOT NULL DEFAULT 'Active',
+	CreatedAt datetime NOT NULL DEFAULT GETDATE(),
+	CONSTRAINT PK_MCP_Test_Customers PRIMARY KEY CLUSTERED (CustomerID),
+	CONSTRAINT UQ_MCP_Test_Customers_Email UNIQUE (Email),
+	CONSTRAINT CK_MCP_Test_Customers_Status CHECK (Status IN ('Active', 'Inactive', 'Suspended'))
+	);
+
+	-- Test table with FK to Customers
+	CREATE TABLE MCP_Test_Orders (
+	OrderID int IDENTITY(1,1) NOT NULL,
+	CustomerID int NOT NULL,
+	OrderDate datetime NOT NULL DEFAULT GETDATE(),
+	Total decimal(18,4) NOT NULL DEFAULT 0,
+	CONSTRAINT PK_MCP_Test_Orders PRIMARY KEY CLUSTERED (OrderID),
+	CONSTRAINT FK_MCP_Test_Orders_Customer FOREIGN KEY (CustomerID)
+	    REFERENCES MCP_Test_Customers(CustomerID)
+	);
+
+	-- Test view joining Customers + Orders
+	CREATE VIEW MCP_Test_CustomerOrders AS
+	SELECT c.CustomerID, c.Name, c.Email, o.OrderID, o.OrderDate, o.Total
+	FROM MCP_Test_Customers c
+	LEFT JOIN MCP_Test_Orders o ON c.CustomerID = o.CustomerID;
+
+	-- Test stored procedure
+	CREATE PROCEDURE MCP_Test_GetCustomerCount
+	@Status varchar(20) = NULL
+	AS
+	BEGIN
+	IF @Status IS NULL
+	    SELECT COUNT(*) AS CustomerCount FROM MCP_Test_Customers;
+	ELSE
+	    SELECT COUNT(*) AS CustomerCount FROM MCP_Test_Customers WHERE Status = @Status;
+	END;

@@ -4,10 +4,38 @@ vi.mock('mssql', () => ({ default: { NVarChar: 'nvarchar' as any } }));
 
 let mockRequest: { input: any; query: any };
 
-vi.mock('../src/db.js', () => ({ getPool: vi.fn() }));
+vi.mock('../../src/db.js', () => ({ getPool: vi.fn() }));
 
-import { registerTools } from '../src/tools.js';
-import { getPool } from '../src/db.js';
+// Mock the metadata repository for get_ddl tests
+vi.mock('../../src/db/metadata-repository.js', () => ({
+  listSchemas: vi.fn(),
+  listTables: vi.fn(),
+  listColumns: vi.fn(),
+  listIndexesSimple: vi.fn(),
+  listForeignKeysSimple: vi.fn(),
+  getTableMetadata: vi.fn(),
+  listViews: vi.fn(),
+  getViewDetail: vi.fn(),
+  listProcedures: vi.fn(),
+  getProcedureDetail: vi.fn(),
+}));
+
+// Mock the DDL builder
+vi.mock('../../src/ddl/ddl-builder.js', () => ({
+  buildDdl: vi.fn(),
+}));
+
+import { registerTools } from '../../src/tools.js';
+import { getPool } from '../../src/db.js';
+import {
+  listSchemas,
+  listTables,
+  listColumns,
+  listIndexesSimple,
+  listForeignKeysSimple,
+  getTableMetadata,
+} from '../../src/db/metadata-repository.js';
+import { buildDdl } from '../../src/ddl/ddl-builder.js';
 
 function captureServer() {
   const tools: any[] = [];
@@ -29,17 +57,18 @@ describe('tools module', () => {
     (getPool as any).mockResolvedValue({ request: () => mockRequest });
   });
 
-  it('registers all 6 tools', () => {
+  it('registers all 11 tools (10 + health_check)', () => {
     const { tools, server } = captureServer();
     registerTools(server);
     expect(tools.map((t: any) => t.name).sort()).toEqual([
-      'describe_table', 'get_ddl', 'list_foreign_keys',
-      'list_indexes', 'list_schemas', 'list_tables',
+      'describe_procedure', 'describe_table', 'describe_view',
+      'get_ddl', 'health_check', 'list_foreign_keys', 'list_indexes',
+      'list_procedures', 'list_schemas', 'list_tables', 'list_views',
     ]);
   });
 
   it('list_schemas returns JSON', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [{ name: 'dbo', schema_id: 1 }] });
+    (listSchemas as any).mockResolvedValueOnce([{ name: 'dbo', schema_id: 1 }]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'list_schemas')!;
@@ -49,60 +78,64 @@ describe('tools module', () => {
   });
 
   it('list_tables with schema filter', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [{ TABLE_SCHEMA: 'hr', TABLE_NAME: 'Emp', TABLE_TYPE: 'BASE TABLE' }] });
+    (listTables as any).mockResolvedValueOnce([{ TABLE_SCHEMA: 'hr', TABLE_NAME: 'Emp', TABLE_TYPE: 'BASE TABLE' }]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'list_tables')!;
     await tool.handler({ schema: 'hr' });
-    expect(mockRequest.input).toHaveBeenCalledWith('schema', 'nvarchar', 'hr');
+    expect(listTables).toHaveBeenCalledWith(expect.anything(), 'hr');
   });
 
   it('describe_table returns columns', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [{ COLUMN_NAME: 'ID', DATA_TYPE: 'int', CHARACTER_MAXIMUM_LENGTH: null, IS_NULLABLE: 'NO', COLUMN_DEFAULT: null }] });
+    (listColumns as any).mockResolvedValueOnce([{ COLUMN_NAME: 'ID', DATA_TYPE: 'int', CHARACTER_MAXIMUM_LENGTH: null, IS_NULLABLE: 'NO', COLUMN_DEFAULT: null }]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'describe_table')!;
     const result = await tool.handler({ schema: 'dbo', table: 'T' });
-    const cols = JSON.parse(result.content[0].text);
-    expect(cols[0].COLUMN_NAME).toBe('ID');
+    expect(result.structuredContent.columns[0].COLUMN_NAME).toBe('ID');
   });
 
   it('describe_table defaults schema to dbo', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [] });
+    (listColumns as any).mockResolvedValueOnce([]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'describe_table')!;
-    // When schema is omitted, Zod .default("dbo") fills it in via the SDK wrapper.
-    // The raw handler receives 'dbo' as the SDK-applied default.
     await tool.handler({ schema: 'dbo', table: 'Users' });
-    expect(mockRequest.input).toHaveBeenCalledWith('schema', 'nvarchar', 'dbo');
+    expect(listColumns).toHaveBeenCalledWith(expect.anything(), 'dbo', 'Users');
   });
 
   it('list_indexes', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [{ IndexName: 'PK_X', IndexType: 'CLUSTERED', ColumnName: 'A', is_included_column: false, is_unique: true, is_primary_key: true }] });
+    (listIndexesSimple as any).mockResolvedValueOnce([{ IndexName: 'PK_X', IndexType: 'CLUSTERED', ColumnName: 'A', is_included_column: false, is_unique: true, is_primary_key: true }]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'list_indexes')!;
     const result = await tool.handler({ schema: 'dbo', table: 'T' });
-    expect(JSON.parse(result.content[0].text)[0].IndexName).toBe('PK_X');
+    expect(result.structuredContent.indexes[0].IndexName).toBe('PK_X');
   });
 
   it('list_foreign_keys', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [{ ForeignKeyName: 'FK_A', ParentTable: 'A', ParentColumn: 'AID', ReferencedTable: 'B', ReferencedColumn: 'BID' }] });
+    (listForeignKeysSimple as any).mockResolvedValueOnce([{ ForeignKeyName: 'FK_A', ParentTable: 'A', ParentColumn: 'AID', ReferencedTable: 'B', ReferencedColumn: 'BID' }]);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'list_foreign_keys')!;
     const result = await tool.handler({ schema: 'dbo', table: 'A' });
-    expect(JSON.parse(result.content[0].text)[0].ForeignKeyName).toBe('FK_A');
+    expect(result.structuredContent.foreignKeys[0].ForeignKeyName).toBe('FK_A');
   });
 
   it('get_ddl with PK', async () => {
-    mockRequest.query
-      .mockResolvedValueOnce({ recordset: [
-        { COLUMN_NAME: 'ID', DATA_TYPE: 'int', CHARACTER_MAXIMUM_LENGTH: null, IS_NULLABLE: 'NO', COLUMN_DEFAULT: null },
-        { COLUMN_NAME: 'Name', DATA_TYPE: 'nvarchar', CHARACTER_MAXIMUM_LENGTH: 100, IS_NULLABLE: 'YES', COLUMN_DEFAULT: null },
-      ]})
-      .mockResolvedValueOnce({ recordset: [{ ColumnName: 'ID' }] });
+    (getTableMetadata as any).mockResolvedValueOnce({
+      schema: 'dbo',
+      name: 'Users',
+      columns: [
+        { name: 'ID', typeName: 'int', isNullable: false },
+        { name: 'Name', typeName: 'nvarchar', maxLength: 100, isNullable: true },
+      ],
+      unsupportedFeatures: [],
+    });
+    (buildDdl as any).mockReturnValueOnce({
+      ddl: 'CREATE TABLE [dbo].[Users] (\n    [ID] int NOT NULL,\n    [Name] nvarchar(100) NULL,\n    CONSTRAINT PK_Users PRIMARY KEY CLUSTERED ([ID])\n);\nGO\n',
+      warnings: [],
+    });
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'get_ddl')!;
@@ -114,19 +147,29 @@ describe('tools module', () => {
   });
 
   it('get_ddl missing table', async () => {
-    mockRequest.query.mockResolvedValueOnce({ recordset: [] });
+    (getTableMetadata as any).mockResolvedValueOnce(null);
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'get_ddl')!;
     const result = await tool.handler({ schema: 'dbo', table: 'Missing' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('not found');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.error.code).toBe('OBJECT_NOT_FOUND');
   });
 
   it('get_ddl varchar MAX', async () => {
-    mockRequest.query
-      .mockResolvedValueOnce({ recordset: [{ COLUMN_NAME: 'Notes', DATA_TYPE: 'nvarchar', CHARACTER_MAXIMUM_LENGTH: -1, IS_NULLABLE: 'YES', COLUMN_DEFAULT: null }] })
-      .mockResolvedValueOnce({ recordset: [] });
+    (getTableMetadata as any).mockResolvedValueOnce({
+      schema: 'dbo',
+      name: 'Notes',
+      columns: [
+        { name: 'Notes', typeName: 'nvarchar', maxLength: -1, isNullable: true },
+      ],
+      unsupportedFeatures: [],
+    });
+    (buildDdl as any).mockReturnValueOnce({
+      ddl: 'CREATE TABLE [dbo].[Notes] (\n    [Notes] nvarchar(MAX) NULL\n);\nGO\n',
+      warnings: [],
+    });
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'get_ddl')!;
@@ -135,9 +178,18 @@ describe('tools module', () => {
   });
 
   it('get_ddl column default', async () => {
-    mockRequest.query
-      .mockResolvedValueOnce({ recordset: [{ COLUMN_NAME: 'Active', DATA_TYPE: 'bit', CHARACTER_MAXIMUM_LENGTH: null, IS_NULLABLE: 'NO', COLUMN_DEFAULT: '((1))' }] })
-      .mockResolvedValueOnce({ recordset: [] });
+    (getTableMetadata as any).mockResolvedValueOnce({
+      schema: 'dbo',
+      name: 'Flags',
+      columns: [
+        { name: 'Active', typeName: 'bit', isNullable: false, defaultDefinition: '((1))' },
+      ],
+      unsupportedFeatures: [],
+    });
+    (buildDdl as any).mockReturnValueOnce({
+      ddl: 'CREATE TABLE [dbo].[Flags] (\n    [Active] bit NOT NULL DEFAULT ((1))\n);\nGO\n',
+      warnings: [],
+    });
     const { tools, server } = captureServer();
     registerTools(server);
     const tool = tools.find((t: any) => t.name === 'get_ddl')!;

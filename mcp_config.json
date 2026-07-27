@@ -3,15 +3,16 @@
         "mssql-schema": {
             "command": "node",
             "args": [
-                "c:/mssql_mcp_server/dist/index.js"
+                "/path/to/mssql-mcp-server/dist/index.js"
             ],
             "env": {
                 "DB_HOST": "your-server",
+                "DB_PORT": "1433",
                 "DB_USER": "your-user",
                 "DB_PASSWORD": "your-password",
                 "DB_NAME": "your-database",
-                "DB_ENCRYPT": "false",
-                "DB_TRUST_CERT": "true"
+                "DB_ENCRYPT": "true",
+                "DB_TRUST_SERVER_CERTIFICATE": "false"
             }
         }
     }
