@@ -150,7 +150,7 @@ async function getColumns(
       ISNULL(ic.increment_value, NULL) AS identityIncrement,
       c.is_computed AS isComputed,
       ISNULL(cc.definition, NULL) AS computedDefinition,
-      c.is_persisted AS isPersisted,
+      ISNULL(cc.is_persisted, 0) AS isPersisted,
       ISNULL(dc.definition, NULL) AS defaultDefinition,
       dc.name AS defaultName
     FROM sys.columns c
@@ -550,7 +550,7 @@ export async function getViewDetail(
     SELECT
       v.object_id,
       sm.definition,
-      sm.is_encrypted AS isEncrypted
+      CAST(OBJECTPROPERTY(v.object_id, 'IsEncrypted') AS bit) AS isEncrypted
     FROM sys.views v
     INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
     LEFT JOIN sys.sql_modules sm ON v.object_id = sm.object_id
@@ -648,7 +648,7 @@ export async function getProcedureDetail(
     SELECT
       p.object_id,
       sm.definition,
-      sm.is_encrypted AS isEncrypted
+      CAST(OBJECTPROPERTY(p.object_id, 'IsEncrypted') AS bit) AS isEncrypted
     FROM sys.procedures p
     INNER JOIN sys.schemas s ON p.schema_id = s.schema_id
     LEFT JOIN sys.sql_modules sm ON p.object_id = sm.object_id

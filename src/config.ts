@@ -52,7 +52,7 @@ const transportSettings = z.object({
   MCP_HTTP_HOST: z.string().default("127.0.0.1"),
   MCP_HTTP_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   MCP_HTTP_ALLOWED_ORIGINS: z.string().default(""),
-  MCP_HTTP_BEARER_TOKEN: z.string().optional(),
+  MCP_HTTP_BEARER_TOKEN: z.string().min(32).optional(),
   MCP_HTTP_BODY_LIMIT_BYTES: z.coerce.number().int().min(1024).default(1048576),
 });
 
@@ -276,6 +276,9 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     min: poolParsed.DB_POOL_MIN,
     max: poolParsed.DB_POOL_MAX,
   };
+  if (pool.min > pool.max) {
+    throw new Error("DB_POOL_MIN must be less than or equal to DB_POOL_MAX.");
+  }
 
   // Query
   const queryParsed = querySettings.parse({
@@ -303,7 +306,7 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     MCP_HTTP_HOST: raw.MCP_HTTP_HOST ?? "127.0.0.1",
     MCP_HTTP_PORT: raw.MCP_HTTP_PORT ?? "3000",
     MCP_HTTP_ALLOWED_ORIGINS: raw.MCP_HTTP_ALLOWED_ORIGINS ?? "",
-    MCP_HTTP_BEARER_TOKEN: raw.MCP_HTTP_BEARER_TOKEN,
+    MCP_HTTP_BEARER_TOKEN: raw.MCP_HTTP_BEARER_TOKEN || undefined,
     MCP_HTTP_BODY_LIMIT_BYTES: raw.MCP_HTTP_BODY_LIMIT_BYTES ?? "1048576",
   });
   const transport: TransportConfig = {
@@ -314,6 +317,16 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
     bearerToken: transportParsed.MCP_HTTP_BEARER_TOKEN,
     bodyLimitBytes: transportParsed.MCP_HTTP_BODY_LIMIT_BYTES,
   };
+  if (
+    transport.mode === "http" &&
+    !isLoopbackHost(transport.httpHost) &&
+    !transport.bearerToken
+  ) {
+    throw new Error(
+      "MCP_HTTP_BEARER_TOKEN is required when MCP_HTTP_HOST is not a loopback address."
+    );
+  }
+  validateAllowedOrigins(transport.allowedOrigins);
 
   // Log
   const logParsed = logSettings.parse({
@@ -326,6 +339,32 @@ export function parseConfig(env: Record<string, string | undefined> = process.en
   };
 
   return { connection, tls, timeouts, retry, pool, query, transport, log };
+}
+
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
+function validateAllowedOrigins(value: string): void {
+  for (const origin of value.split(",").map((item) => item.trim()).filter(Boolean)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error(`Invalid MCP_HTTP_ALLOWED_ORIGINS entry: ${origin}`);
+    }
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.origin !== origin) {
+      throw new Error(
+        `MCP_HTTP_ALLOWED_ORIGINS entries must be exact HTTP(S) origins: ${origin}`
+      );
+    }
+  }
 }
 
 // ── Helpers ──

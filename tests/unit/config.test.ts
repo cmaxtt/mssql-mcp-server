@@ -312,6 +312,32 @@ describe('parseConfig', () => {
 
       expect(config.transport.httpHost).toBe('127.0.0.1');
     });
+
+    it('requires authentication for a non-loopback HTTP bind', () => {
+      expect(() =>
+        parseConfig({
+          DB_HOST: 'mysqlserver',
+          DB_NAME: 'mydb',
+          DB_USER: 'myuser',
+          DB_PASSWORD: 'mypassword',
+          MCP_TRANSPORT: 'http',
+          MCP_HTTP_HOST: '0.0.0.0',
+        })
+      ).toThrow(/BEARER_TOKEN/);
+    });
+
+    it('allows an authenticated non-loopback HTTP bind', () => {
+      const config = parseConfig({
+        DB_HOST: 'mysqlserver',
+        DB_NAME: 'mydb',
+        DB_USER: 'myuser',
+        DB_PASSWORD: 'mypassword',
+        MCP_TRANSPORT: 'http',
+        MCP_HTTP_HOST: '0.0.0.0',
+        MCP_HTTP_BEARER_TOKEN: 'a-long-random-token-at-least-32-chars',
+      });
+      expect(config.transport.httpHost).toBe('0.0.0.0');
+    });
   });
 
   describe('logging', () => {
@@ -337,6 +363,19 @@ describe('parseConfig', () => {
       expect(() =>
         parseConfig({ DB_HOST: 'mysqlserver' })
       ).toThrow(/DB_NAME, DB_USER, DB_PASSWORD must be provided/);
+    });
+
+    it('rejects a pool minimum larger than its maximum', () => {
+      expect(() =>
+        parseConfig({
+          DB_HOST: 'mysqlserver',
+          DB_NAME: 'mydb',
+          DB_USER: 'myuser',
+          DB_PASSWORD: 'mypassword',
+          DB_POOL_MIN: '5',
+          DB_POOL_MAX: '2',
+        })
+      ).toThrow(/DB_POOL_MIN/);
     });
   });
 });
@@ -373,7 +412,7 @@ describe('redactConfig', () => {
       DB_USER: 'myuser',
       DB_PASSWORD: 'mypassword',
       MCP_TRANSPORT: 'http',
-      MCP_HTTP_BEARER_TOKEN: 'token123',
+      MCP_HTTP_BEARER_TOKEN: 'token123-token123-token123-token123',
     });
 
     const redacted = redactConfig(config);

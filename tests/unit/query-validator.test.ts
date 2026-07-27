@@ -137,13 +137,8 @@ describe('query-validator', () => {
   describe('multi-part names', () => {
     it('rejects three-part table names', () => {
       const result = validateQuery('SELECT * FROM MyDB.dbo.tblInvoices', defaultOpts);
-      // The parser will parse MyDB.dbo as schema, tblInvoices as table
-      // or it may fail. Either way, our multi-part name check should catch it.
-      // The key test: if it parses, it should be rejected.
-      if (result.valid) {
-        // If it somehow passed, the table name would have dots
-        expect(result.tables?.some(t => t.table.includes('.'))).toBe(false);
-      }
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Three-');
     });
   });
 
@@ -168,6 +163,15 @@ describe('query-validator', () => {
       expect(result.tables).toBeDefined();
       expect(result.tables!.length).toBeGreaterThanOrEqual(1);
       expect(result.tables![0].table.toLowerCase()).toBe('tblinvoices');
+    });
+
+    it('does not treat column aliases or CTE names as physical tables', () => {
+      const result = validateQuery(
+        'WITH recent AS (SELECT i.InvoiceID FROM dbo.tblInvoices i) SELECT r.InvoiceID FROM recent r',
+        { ...defaultOpts, allowedSchemas: 'dbo', allowedTables: 'tblInvoices' }
+      );
+      expect(result.valid).toBe(true);
+      expect(result.tables).toEqual([{ schema: 'dbo', table: 'tblInvoices' }]);
     });
   });
 });

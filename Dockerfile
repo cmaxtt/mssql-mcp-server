@@ -1,34 +1,20 @@
-# Build stage
-FROM node:20-alpine AS builder
+FROM node:24.18.0-alpine AS builder
 
 WORKDIR /app
-
-COPY package*.json ./
-COPY tsconfig.json ./
-
-RUN npm install
-
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci
 COPY src ./src
-
 RUN npm run build
 
-# Runtime stage
-FROM node:20-alpine
+FROM node:24.18.0-alpine AS runtime
 
+ENV NODE_ENV=production
 WORKDIR /app
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --from=builder --chown=node:node /app/dist ./dist
 
-RUN npm install --production
-
-# Non-root user for security
 USER node
-
-# Default environment variables (can be overridden)
-ENV DB_PORT=1433
-ENV DB_ENCRYPT=false
-ENV DB_TRUST_CERT=true
-
-# Entry point
+EXPOSE 3000
 CMD ["node", "dist/index.js"]

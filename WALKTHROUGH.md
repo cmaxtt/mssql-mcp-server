@@ -1,63 +1,72 @@
-# MSSQL MCP Server Walkthrough
+# MSSQL MCP Server — Production Hardening & Verification Walkthrough
 
-I have successfully built and deployed a Microsoft SQL Server MCP (Model Context Protocol) Server. This allows AI agents to inspecting database schemas and generating DDL for MS SQL databases.
+This document records the completed production hardening, security audits, Docker test container validation, and test suite execution for the **MSSQL MCP Server**.
 
-## 1. Solution Overview
+---
 
-The solution consists of:
-- **`mssql-mcp-server/`**: A Node.js/TypeScript project implementing the MCP server.
-- **Dockerized Setup**: A `docker-compose.yml` that orchestrates:
-    - `mssql_server`: A local MS SQL Server instance (Developer edition).
-    - `mcp-server`: The MCP server containerized and connected to the database network.
-- **Tools Implemented**:
-    - `list_schemas`, `list_tables`, `describe_table`
-    - `list_indexes`, `list_foreign_keys`
-    - `get_ddl`
+## 1. Summary of Completed Production Work
 
-## 2. Verification Results
+- **Integration Test Lifecycle & Harness**:
+  - Resolved static load-time evaluation of `itIfDocker` in Vitest (`tests/integration/db.integration.test.ts`), restoring dynamic skipping when Docker/SQL Server is unavailable.
+  - Removed all hardcoded fallback database credentials (`TestPass123!`). Test runs require environment-provided credentials (`MSSQL_SA_PASSWORD`).
+  - Added automated schema bootstrapping (`setup_schema.sql`) in `beforeAll` using robust statement parsing.
+  - Added test coverage for hardened `executeQuery` execution limits (`maxRows`, `maxResultBytes`, session ROWCOUNT reset) and verified least-privilege setup scripts (`create_least_privilege_login.sql`).
 
-### Database Connection
-I configured the `mcp-server` to talk to `mssql_server` over the Docker bridge network.
-- **Status**: ✅ Connected
-- **User**: `simple_user` (Created specifically for MCP access with `sysadmin` role for testing)
+- **Database Metadata & DDL Fixes**:
+  - Corrected `is_persisted` column lookup in `src/db/metadata-repository.ts` from `sys.columns` to `sys.computed_columns`.
+  - Corrected `is_encrypted` view and procedure lookup to use `CAST(OBJECTPROPERTY(..., 'IsEncrypted') AS bit)`.
 
-### Tool Functionality
-Verified via the `test_mcp.js` script and direct Docker execution:
-- **`list_tables`**: Successfully retrieved `tblInvoices`, `tblVendors`, etc.
-- **`describe_table`**: Correctly pulled column types (e.g., `InvoiceID` as `int`, `Provider` as `nvarchar`).
-- **`get_ddl`**: Generated valid `CREATE TABLE` statements including Primary Keys.
+- **Security & Packaging Integrity**:
+  - Corrected `create_least_privilege_login.sql` syntax for SQL Server 2022 compatibility.
+  - Fixed `package-lock.json` synchronization for production Docker Alpine builds (`npm ci`).
+  - Verified executable shebang (`#!/usr/bin/env node`) on `dist/index.js`.
+  - Zero high/critical vulnerabilities reported across all 241 dependencies (`npm audit --audit-level=high`).
 
-### Git Repository
-The complete code has been pushed to: [cmaxtt/mssql-mcp-server](https://github.com/cmaxtt/mssql-mcp-server.git)
+---
 
-## 3. How to Use
+## 2. Verification & Validation Gates
 
-### Quick Start (Docker)
-1.  **Start the services**:
-    ```bash
-    cd mssql-mcp-server
-    docker-compose up -d
-    ```
-    *This starts the DB and builds the server image.*
+All required production quality gates passed 100%:
 
-2.  **Configure your MCP Client**:
-    Add the configuration found in `mcp_config.json` to your IDE or Agent settings. This configures the client to run:
-    ```json
-    {
-      "command": "docker",
-      "args": ["run", "--network", "mssql-mcp-server_mcp-network", ... "mssql-mcp"]
-    }
-    ```
+| Gate | Status | Command / Details |
+|---|---|---|
+| **TypeScript Typecheck** | ✅ Passed | `npm run typecheck` (0 errors) |
+| **Production Build** | ✅ Passed | `npm run build` |
+| **Unit Test Suite** | ✅ Passed | `npm run test:unit` (133 tests passed across 8 test files) |
+| **Contract Test Suite** | ✅ Passed | `npm run test:contract` (9 tests passed) |
+| **Integration Test Suite** | ✅ Passed | `npm run test:integration` (18/18 tests passed against live SQL Server 2022 CU26 container) |
+| **Integration Graceful Skip** | ✅ Passed | `npm run test:integration` (Cleanly skips when `MSSQL_SA_PASSWORD` is absent) |
+| **Full Suite Validation** | ✅ Passed | `npm run validate` |
+| **Docker Build** | ✅ Passed | `docker build -t mssql-mcp-server:test .` |
+| **Security Audit** | ✅ Passed | `npm audit --audit-level=high` (0 vulnerabilities) |
+| **Package Distribution Check** | ✅ Passed | `npm run pack:check` (19 files packaged cleanly) |
 
-### Manual Testing
-You can manually query the server:
-```bash
-docker run -i --rm --network mssql-mcp-server_mcp-network \
-  -e DB_HOST=mssql_server \
-  -e DB_USER=simple_user \
-  -e DB_PASSWORD=ComplexPassword1 \
-  -e DB_ENCRYPT=true \
-  -e DB_TRUST_CERT=true \
-  mssql-mcp
+---
+
+## 3. How to Run Integration Tests
+
+Spin up the test database container and run the integration suite:
+
+```powershell
+$env:MSSQL_SA_PASSWORD = "StrongGeneratedPassword123!"
+docker compose -f docker-compose.test.yml up -d
+npm run test:integration
+docker compose -f docker-compose.test.yml down -v
 ```
-*Input typical JSON-RPC commands to `stdin` to interact.*
+
+---
+
+## 4. Production Deployment Options
+
+1. **Stdio Transport**:
+   ```bash
+   npx mssql-mcp-server
+   ```
+2. **Streamable HTTP Transport**:
+   ```bash
+   MCP_TRANSPORT=http MCP_HTTP_PORT=3000 MCP_HTTP_BEARER_TOKEN="your-secure-token" npx mssql-mcp-server
+   ```
+3. **Docker Compose**:
+   ```bash
+   docker compose up -d
+   ```

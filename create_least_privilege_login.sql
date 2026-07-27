@@ -52,7 +52,6 @@ DENY INSERT TO [<login>];
 DENY REFERENCES TO [<login>];
 DENY TAKE OWNERSHIP TO [<login>];
 DENY UPDATE TO [<login>];
-DENY VIEW CHANGE TRACKING TO [<login>];
 
 -- Verify setup
 SELECT

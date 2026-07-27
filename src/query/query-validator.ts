@@ -103,7 +103,14 @@ export function validateQuery(
   }
 
   // 7. Extract table references for allowlist check
-  const tables = extractTables(ast);
+  const extracted = extractTables(ast);
+  const tables = extracted.tables;
+  if (extracted.hasMultiPartName) {
+    return {
+      valid: false,
+      error: "Three- and four-part table names are not allowed.",
+    };
+  }
   const parsedSchemas = options.allowedSchemas
     .split(",")
     .map((s) => s.trim().toLowerCase())
@@ -136,40 +143,42 @@ export function validateQuery(
     }
   }
 
-  // 8. Reject three- and four-part names
-  for (const t of tables) {
-    if (t.table.includes(".")) {
-      // Multi-part name like db.schema.table or server.db.schema.table
-      return {
-        valid: false,
-        error: "Multi-part table names (beyond schema.table) are not allowed.",
-      };
-    }
-  }
-
   return { valid: true, tables };
 }
 
 /**
  * Extract table references from the AST.
  */
-function extractTables(ast: any): Array<{ schema: string | null; table: string }> {
+function extractTables(ast: any): {
+  tables: Array<{ schema: string | null; table: string }>;
+  hasMultiPartName: boolean;
+} {
   const tables: Array<{ schema: string | null; table: string }> = [];
+  const cteNames = new Set<string>();
+  let hasMultiPartName = false;
+
+  for (const cte of ast.with ?? []) {
+    const name = cte?.name?.value;
+    if (typeof name === "string") cteNames.add(name.toLowerCase());
+  }
 
   function walk(node: any) {
     if (!node || typeof node !== "object") return;
 
-    // Table reference in FROM/JOIN
-    if (node.table) {
-      // node-sql-parser may set `schema` or `db` for the schema part
-      const schemaName = node.schema || node.db || null;
-      tables.push({
-        schema: schemaName,
-        table: node.table,
-      });
+    if (Array.isArray(node.from)) {
+      for (const source of node.from) {
+        if (typeof source?.table === "string" && !cteNames.has(source.table.toLowerCase())) {
+          // TransactSQL AST uses `db` for schema.table and both `db` plus
+          // `schema` for database.schema.table.
+          if (source.db && source.schema) hasMultiPartName = true;
+          tables.push({
+            schema: source.schema || source.db || null,
+            table: source.table,
+          });
+        }
+      }
     }
 
-    // Recurse into children
     for (const key of Object.keys(node)) {
       const val = node[key];
       if (Array.isArray(val)) {
@@ -181,5 +190,5 @@ function extractTables(ast: any): Array<{ schema: string | null; table: string }
   }
 
   walk(ast);
-  return tables;
+  return { tables, hasMultiPartName };
 }

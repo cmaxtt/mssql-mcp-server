@@ -93,6 +93,9 @@ export async function connectToDatabase(
   options: ConnectOptions,
   log: pino.Logger = getLogger()
 ): Promise<sql.ConnectionPool> {
+  if (isShuttingDown) {
+    throw new Error("Database manager is shutting down");
+  }
   // If already connecting, return the in-flight promise
   if (connectPromise) {
     log.debug("Connection already in progress, waiting");
@@ -129,20 +132,34 @@ async function doConnect(
   let lastError: Error | undefined;
 
   for (let attempt = 1; attempt <= retry.maxRetries + 1; attempt++) {
+    let newPool: sql.ConnectionPool | undefined;
     try {
-      const newPool = new sql.ConnectionPool(config);
+      newPool = new sql.ConnectionPool(config);
+      applyRuntimeOptions(newPool, options);
+      const connectingPool = newPool;
 
       // Listen for pool-level errors (e.g., connection dropped after initial connect)
-      newPool.on("error", (err: Error) => {
-        log.error({ err, poolConnected: newPool.connected }, "Pool error event");
+      connectingPool.on("error", (err: Error) => {
+        log.error({ err, poolConnected: connectingPool.connected }, "Pool error event");
       });
 
-      await newPool.connect();
-      pool = newPool;
+      await connectingPool.connect();
+      if (isShuttingDown) {
+        await connectingPool.close();
+        throw new Error("Database manager is shutting down");
+      }
+      pool = connectingPool;
 
       log.info({ attempt, totalAttempts: attempt }, "Connected to MSSQL database");
-      return newPool;
+      return connectingPool;
     } catch (err) {
+      if (newPool) {
+        try {
+          await newPool.close();
+        } catch {
+          // The failed pool may never have opened; cleanup is best-effort.
+        }
+      }
       lastError = err instanceof Error ? err : new Error(String(err));
 
       const isTransient = isTransientError(lastError);
@@ -186,6 +203,25 @@ async function doConnect(
 
   // Shouldn't reach here, but TypeScript needs it
   throw lastError ?? new Error("Connection failed");
+}
+
+function applyRuntimeOptions(poolToConfigure: sql.ConnectionPool, options: ConnectOptions): void {
+  // Connection-string mode is parsed by node-mssql. Apply the process-level
+  // operational controls afterward so both configuration modes behave alike.
+  if (!options.connection.useConnectionString) return;
+  const config = (poolToConfigure as sql.ConnectionPool & { config: sql.config }).config;
+  config.connectionTimeout = options.timeouts.connectMs;
+  config.requestTimeout = options.timeouts.requestMs;
+  config.pool = {
+    ...config.pool,
+    min: options.pool.min,
+    max: options.pool.max,
+  };
+  config.options = {
+    ...config.options,
+    encrypt: options.tls.encrypt,
+    trustServerCertificate: options.tls.trustServerCertificate,
+  };
 }
 
 export async function getPool(): Promise<sql.ConnectionPool> {

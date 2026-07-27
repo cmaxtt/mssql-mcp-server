@@ -1,127 +1,101 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportConfig } from "../config.js";
+import { getPool } from "../db.js";
 import { getLogger } from "../logger.js";
-import http from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
 
 const log = getLogger().child({ component: "http-transport" });
+const READINESS_TIMEOUT_MS = 2_000;
 
 export interface HttpServerOptions {
   transport: TransportConfig;
   mcpServer: McpServer;
 }
 
-/**
- * Start a Streamable HTTP MCP server with all security controls applied.
- */
 export async function startHttpServer(options: HttpServerOptions): Promise<http.Server> {
   const { transport, mcpServer } = options;
-
-  const mcpTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
-
-  // Connect MCP server to transport
+  const mcpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcpServer.connect(mcpTransport);
 
-  const allowedOrigins = transport.allowedOrigins
-    ? transport.allowedOrigins.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
+  const allowedOrigins = new Set(
+    transport.allowedOrigins.split(",").map((value) => value.trim()).filter(Boolean)
+  );
 
   const server = http.createServer(async (req, res) => {
-    // Security: validate Origin header
-    if (allowedOrigins.length > 0) {
-      const origin = req.headers.origin;
-      if (origin && !allowedOrigins.includes(origin)) {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Origin not allowed." }));
-        return;
-      }
-      // Set CORS only when origin matches
-      res.setHeader("Access-Control-Allow-Origin", origin || "");
-      res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+    setSecurityHeaders(res);
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+
+    if (path === "/health/live" && req.method === "GET") {
+      return sendJson(res, 200, { status: "ok" });
     }
 
-    // Handle preflight
+    if (path === "/health/ready" && req.method === "GET") {
+      const ready = await databaseIsReady();
+      return sendJson(res, ready ? 200 : 503, { status: ready ? "ok" : "unavailable" });
+    }
+
+    if (path !== "/mcp") {
+      return sendJson(res, 404, { error: "Not found." });
+    }
+
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigins.has(origin)) {
+      return sendJson(res, 403, { error: "Origin not allowed." });
+    }
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+
     if (req.method === "OPTIONS") {
       res.writeHead(204);
-      res.end();
-      return;
+      return res.end();
     }
 
-    // Bearer token auth for non-loopback binds
-    if (
-      transport.httpHost !== "127.0.0.1" &&
-      transport.httpHost !== "localhost" &&
-      transport.httpHost !== "::1"
-    ) {
-      if (transport.bearerToken) {
-        const auth = req.headers.authorization;
-        if (!auth || auth !== `Bearer ${transport.bearerToken}`) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Unauthorized." }));
-          return;
-        }
+    if (!["POST", "GET", "DELETE"].includes(req.method ?? "")) {
+      res.setHeader("Allow", "POST, GET, DELETE, OPTIONS");
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+
+    if (transport.bearerToken && !hasValidBearerToken(req, transport.bearerToken)) {
+      res.setHeader("WWW-Authenticate", "Bearer");
+      return sendJson(res, 401, { error: "Unauthorized." });
+    }
+
+    try {
+      const body =
+        req.method === "POST"
+          ? await readJsonBody(req, transport.bodyLimitBytes)
+          : undefined;
+      await mcpTransport.handleRequest(req, res, body);
+    } catch (err) {
+      if (err instanceof HttpRequestError) {
+        return sendJson(res, err.status, { error: err.message });
+      }
+      log.error({ err }, "MCP request handler error");
+      if (!res.headersSent) {
+        return sendJson(res, 500, { error: "Internal server error." });
       }
     }
+  });
 
-    // Body size limit
-    const contentLength = parseInt(req.headers["content-length"] || "0", 10);
-    if (contentLength > transport.bodyLimitBytes) {
-      res.writeHead(413, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Request body too large." }));
-      return;
-    }
-
-    // Route: /health/live — liveness (no DB query)
-    if (req.url === "/health/live" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok" }));
-      return;
-    }
-
-    // Route: /health/ready — readiness (DB ping)
-    if (req.url === "/health/ready" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok" }));
-      return;
-    }
-
-    // Route: /mcp — MCP protocol
-    if (req.url === "/mcp" && (req.method === "POST" || req.method === "GET" || req.method === "DELETE")) {
-      try {
-        await mcpTransport.handleRequest(req, res);
-      } catch (err) {
-        log.error({ err }, "MCP request handler error");
-        if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Internal server error." }));
-        }
-      }
-      return;
-    }
-
-    // Unknown route
-    if (req.url === "/mcp" || req.url?.startsWith("/health")) {
-      res.writeHead(405, {
-        "Content-Type": "application/json",
-        Allow: "POST, GET, DELETE, OPTIONS",
-      });
-      res.end(JSON.stringify({ error: "Method not allowed." }));
-    } else {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not found." }));
-    }
+  server.requestTimeout = 35_000;
+  server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 1_000;
+  server.once("close", () => {
+    void mcpTransport.close().catch((err) => log.error({ err }, "HTTP transport close failed"));
   });
 
   return new Promise((resolve, reject) => {
-    server.on("error", (err) => {
-      log.error({ err }, "HTTP server error");
-      reject(err);
-    });
-
+    server.once("error", reject);
     server.listen(transport.httpPort, transport.httpHost, () => {
+      server.removeListener("error", reject);
+      server.on("error", (err) => log.error({ err }, "HTTP server error"));
       log.info(
         { host: transport.httpHost, port: transport.httpPort },
         "MCP server listening (Streamable HTTP)"
@@ -129,4 +103,82 @@ export async function startHttpServer(options: HttpServerOptions): Promise<http.
       resolve(server);
     });
   });
+}
+
+async function databaseIsReady(): Promise<boolean> {
+  try {
+    const pool = await getPool();
+    const request = pool.request();
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        request.cancel();
+        reject(new Error("Readiness query timed out"));
+      }, READINESS_TIMEOUT_MS);
+      timer.unref();
+    });
+    await Promise.race([request.query("SELECT 1 AS ping"), timeout]);
+    if (timer) clearTimeout(timer);
+    return true;
+  } catch (err) {
+    log.warn({ err }, "Database readiness check failed");
+    return false;
+  }
+}
+
+async function readJsonBody(req: IncomingMessage, limitBytes: number): Promise<unknown> {
+  const rawLength = req.headers["content-length"];
+  if (rawLength !== undefined) {
+    const declared = Number(rawLength);
+    if (!Number.isInteger(declared) || declared < 0) {
+      throw new HttpRequestError(400, "Invalid Content-Length.");
+    }
+    if (declared > limitBytes) {
+      throw new HttpRequestError(413, "Request body too large.");
+    }
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > limitBytes) {
+      req.resume();
+      throw new HttpRequestError(413, "Request body too large.");
+    }
+    chunks.push(buffer);
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new HttpRequestError(400, "Request body must be valid JSON.");
+  }
+}
+
+function hasValidBearerToken(req: IncomingMessage, expected: string): boolean {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return false;
+  const providedDigest = createHash("sha256").update(auth.slice(7)).digest();
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(providedDigest, expectedDigest);
+}
+
+function setSecurityHeaders(res: ServerResponse): void {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent) return;
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+class HttpRequestError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
 }

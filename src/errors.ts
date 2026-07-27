@@ -44,6 +44,18 @@ export interface ToolError {
 export function classifyDatabaseError(err: unknown): ToolError {
   if (err instanceof Error) {
     const msg = err.message || "";
+    const publicCode = (err as Error & { publicErrorCode?: string }).publicErrorCode;
+    if (publicCode && Object.values(ErrorCode).includes(publicCode as ErrorCode)) {
+      return { code: publicCode as ErrorCode, message: msg };
+    }
+
+    const driverCode = (err as Error & { code?: string }).code;
+    if (driverCode === "ETIMEOUT" || /request.*time.?out/i.test(msg)) {
+      return {
+        code: ErrorCode.QUERY_TIMEOUT,
+        message: "The query timed out. Try a narrower query or increase the timeout.",
+      };
+    }
 
     // Connection / pool errors
     if (
@@ -52,8 +64,7 @@ export function classifyDatabaseError(err: unknown): ToolError {
       msg.includes("connect ETIMEDOUT") ||
       msg.includes("connect ECONNREFUSED") ||
       msg.includes("Failed to connect") ||
-      msg.includes("Connection pool is closed") ||
-      msg.includes("timeout")
+      msg.includes("Connection pool is closed")
     ) {
       return {
         code: ErrorCode.DATABASE_UNAVAILABLE,

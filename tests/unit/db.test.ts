@@ -16,6 +16,10 @@ vi.mock('mssql', () => {
   const connPoolCtor = vi.fn(function (this: any, _config: unknown) {
     // Copy mockPool properties onto `this` so `new ConnectionPool()` works
     Object.assign(this, mockPool);
+    this.config =
+      typeof _config === 'string'
+        ? { options: {}, pool: {} }
+        : { ...(_config as Record<string, unknown>) };
   });
   return {
     default: {
@@ -115,7 +119,7 @@ describe('connectToDatabase', () => {
     const result = await connectToDatabase(makeOptions());
 
     expect(mockPool.connect).toHaveBeenCalled();
-    expect(result).toEqual(mockPool);
+    expect(result).toMatchObject(mockPool);
   });
 
   it('registers pool error listener', async () => {
@@ -297,7 +301,7 @@ describe('getPool', () => {
     const { connectToDatabase, getPool } = await import('../../src/db.js');
     await connectToDatabase(makeOptions());
     const p = await getPool();
-    expect(p).toEqual(mockPool);
+    expect(p).toMatchObject(mockPool);
   });
 
   it('throws when pool is connected=false', async () => {

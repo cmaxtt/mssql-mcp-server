@@ -34,24 +34,34 @@ export async function executeQuery(
 
   // Concurrency gate
   if (activeQueries >= config.maxConcurrency) {
-    throw new Error("Too many concurrent queries. Try again later.");
+    throw publicError(
+      "DATABASE_UNAVAILABLE",
+      "The query concurrency limit has been reached. Try again later."
+    );
   }
 
   activeQueries++;
   const start = Date.now();
 
   try {
-    // Create a dedicated request with limits
     const request = pool.request();
-    (request as any).queryTimeout = timeouts.requestMs;
+    const queryWithLimits = `
+SET LOCK_TIMEOUT ${timeouts.lockMs};
+SET ROWCOUNT ${config.maxRows + 1};
+BEGIN TRY
+  ${query}
+  SET ROWCOUNT 0;
+  SET LOCK_TIMEOUT -1;
+END TRY
+BEGIN CATCH
+  SET ROWCOUNT 0;
+  SET LOCK_TIMEOUT -1;
+  THROW;
+END CATCH;`;
 
-    // Set rowcount to limit + 1 so we can detect truncation
-    const queryWithLimit = `SET ROWCOUNT ${config.maxRows + 1};\n${query}`;
-
-    const result = await request.query(queryWithLimit);
-
-    // Reset ROWCOUNT
-    await pool.request().query("SET ROWCOUNT 0");
+    // Session-scoped settings and cleanup must run in the same SQL batch so a
+    // pooled connection can never be returned with ROWCOUNT/LOCK_TIMEOUT set.
+    const result = await request.query(queryWithLimits);
 
     const rows = result.recordset;
     const truncated = rows.length > config.maxRows;
@@ -64,13 +74,10 @@ export async function executeQuery(
     const serialized = JSON.stringify(normalized);
     const bytes = Buffer.byteLength(serialized, "utf8");
     if (bytes > config.maxResultBytes) {
-      return {
-        columns: Object.keys(normalized[0] || {}),
-        rows: [],
-        rowCount: 0,
-        truncated: true,
-        elapsedMs: Date.now() - start,
-      };
+      throw publicError(
+        "RESULT_TOO_LARGE",
+        "The serialized query result exceeds the configured byte limit."
+      );
     }
 
     return {
@@ -84,17 +91,13 @@ export async function executeQuery(
       truncated,
       elapsedMs: Date.now() - start,
     };
-  } catch (err) {
-    // Reset ROWCOUNT on error too
-    try {
-      await pool.request().query("SET ROWCOUNT 0");
-    } catch {
-      // Ignore cleanup errors
-    }
-    throw err;
   } finally {
     activeQueries--;
   }
+}
+
+function publicError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { publicErrorCode: code });
 }
 
 /**

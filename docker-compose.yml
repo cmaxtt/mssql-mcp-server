@@ -1,41 +1,49 @@
 services:
   mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: mssql_server
+    image: mcr.microsoft.com/mssql/server:2022-CU26-ubuntu-22.04
     environment:
-      - ACCEPT_EULA=Y
-      - MSSQL_SA_PASSWORD=YourStrong!Passw0rd
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD}"
     ports:
-      - "1433:1433"
-    networks:
-      - mcp-network
+      - "127.0.0.1:1433:1433"
     healthcheck:
-      test: [ "CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P YourStrong!Passw0rd -Q 'SELECT 1' || exit 1" ]
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" || exit 1
       interval: 10s
-      retries: 10
-      start_period: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - mssql-data:/var/opt/mssql
 
-  # MCP Server service definition for reference or debugging
-  # In production usage with an MCP client using stdio, you would typically use:
-  # docker run -i --rm --network mssql-mcp-server_mcp-network -e DB_HOST=mssql -e DB_USER=sa -e DB_PASSWORD=YourStrong!Passw0rd ...
   mcp-server:
     build: .
-    container_name: mcp_server
     depends_on:
       mssql:
         condition: service_healthy
     environment:
-      - DB_HOST=mssql
-      - DB_USER=sa
-      - DB_PASSWORD=YourStrong!Passw0rd
-      - DB_NAME=master
-      - DB_ENCRYPT=false
-      - DB_TRUST_CERT=true
-    networks:
-      - mcp-network
-    # Keep it alive for debugging if needed, though real usage is usually interactive
-    command: [ "node", "dist/index.js" ]
+      DB_HOST: mssql
+      DB_NAME: "${DB_NAME:-master}"
+      DB_USER: sa
+      DB_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD}"
+      DB_ENCRYPT: "true"
+      DB_TRUST_SERVER_CERTIFICATE: "true"
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_PORT: 3000
+      MCP_HTTP_BEARER_TOKEN: "${MCP_HTTP_BEARER_TOKEN:?Set MCP_HTTP_BEARER_TOKEN}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 6
 
-networks:
-  mcp-network:
-    driver: bridge
+volumes:
+  mssql-data:
